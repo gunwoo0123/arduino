@@ -1,0 +1,376 @@
+// 블루투스 제어 + 자율주행 RC카
+// 초음파 센서: 앞 2개 (좌측, 우측) + 좌우 측면 2개
+// Arduino Uno + L9110 x2 + DC모터 4개 + 초음파센서 4개 + HC-06
+
+#include <SoftwareSerial.h>
+
+// 블루투스 HC-06 (RX=A4, TX=A5 사용)
+SoftwareSerial bluetooth(A4, A5); // RX, TX
+
+// 초음파 센서 핀 정의 (앞 좌측, 앞 우측, 좌측면, 우측면)
+#define TRIG_FRONT_LEFT 2
+#define ECHO_FRONT_LEFT 3
+#define TRIG_FRONT_RIGHT 4
+#define ECHO_FRONT_RIGHT 5
+#define TRIG_SIDE_LEFT 6
+#define ECHO_SIDE_LEFT 7
+#define TRIG_SIDE_RIGHT 8
+#define ECHO_SIDE_RIGHT 9
+
+// L9110 모터드라이버 핀 정의
+#define MOTOR_FL_A 10
+#define MOTOR_FL_B 11
+#define MOTOR_FR_A 12
+#define MOTOR_FR_B 13
+#define MOTOR_BL_A A0
+#define MOTOR_BL_B A1
+#define MOTOR_BR_A A2
+#define MOTOR_BR_B A3
+
+// 설정값
+#define SAFE_DISTANCE 20      // 안전 거리 (cm)
+#define SIDE_DISTANCE 15      // 측면 안전 거리 (cm)
+#define MOTOR_SPEED 200       // 모터 속도 (0-255)
+#define TURN_DELAY 500        // 회전 시간 (ms)
+#define SCAN_DELAY 100        // 센서 스캔 간격 (ms)
+
+// 모드 및 상태 변수
+bool autoMode = true;  // true: 자율주행, false: 수동조종
+char command = 'S';    // 현재 명령어
+
+// 거리 저장 변수
+int frontLeftDistance, frontRightDistance;
+int sideLeftDistance, sideRightDistance;
+
+void setup() {
+  Serial.begin(9600);
+  bluetooth.begin(9600);
+  
+  // 초음파 센서 핀 설정
+  pinMode(TRIG_FRONT_LEFT, OUTPUT);
+  pinMode(ECHO_FRONT_LEFT, INPUT);
+  pinMode(TRIG_FRONT_RIGHT, OUTPUT);
+  pinMode(ECHO_FRONT_RIGHT, INPUT);
+  pinMode(TRIG_SIDE_LEFT, OUTPUT);
+  pinMode(ECHO_SIDE_LEFT, INPUT);
+  pinMode(TRIG_SIDE_RIGHT, OUTPUT);
+  pinMode(ECHO_SIDE_RIGHT, INPUT);
+  
+  // 모터 핀 설정
+  pinMode(MOTOR_FL_A, OUTPUT);
+  pinMode(MOTOR_FL_B, OUTPUT);
+  pinMode(MOTOR_FR_A, OUTPUT);
+  pinMode(MOTOR_FR_B, OUTPUT);
+  pinMode(A0, OUTPUT);
+  pinMode(A1, OUTPUT);
+  pinMode(A2, OUTPUT);
+  pinMode(A3, OUTPUT);
+  
+  Serial.println("4방향 초음파 RC카 시작!");
+  Serial.println("앞(좌우) + 측면(좌우)");
+  bluetooth.println("Ready!");
+  delay(2000);
+}
+
+void loop() {
+  // 블루투스 명령 수신
+  if (bluetooth.available()) {
+    char received = bluetooth.read();
+    handleBluetoothCommand(received);
+  }
+  
+  // 자율주행 모드
+  if (autoMode) {
+    scanAllDirections();
+    sendSensorData();
+    avoidObstacles();
+    delay(SCAN_DELAY);
+  }
+  // 수동 조종 모드
+  else {
+    executeManualCommand(command);
+  }
+}
+
+// 블루투스 명령 처리
+void handleBluetoothCommand(char cmd) {
+  command = cmd;
+  
+  switch(cmd) {
+    case 'A':  // 자율주행 모드
+      autoMode = true;
+      bluetooth.println("Mode: AUTO");
+      Serial.println("자율주행 모드");
+      break;
+      
+    case 'M':  // 수동 조종 모드
+      autoMode = false;
+      stopMotors();
+      bluetooth.println("Mode: MANUAL");
+      Serial.println("수동 조종 모드");
+      break;
+      
+    case 'F':  // 전진
+      if (!autoMode) {
+        bluetooth.println("Forward");
+      }
+      break;
+      
+    case 'B':  // 후진
+      if (!autoMode) {
+        bluetooth.println("Backward");
+      }
+      break;
+      
+    case 'L':  // 좌회전
+      if (!autoMode) {
+        bluetooth.println("Left");
+      }
+      break;
+      
+    case 'R':  // 우회전
+      if (!autoMode) {
+        bluetooth.println("Right");
+      }
+      break;
+      
+    case 'S':  // 정지
+      if (!autoMode) {
+        stopMotors();
+        bluetooth.println("Stop");
+      }
+      break;
+      
+    case 'D':  // 센서 데이터 요청
+      scanAllDirections();
+      sendSensorData();
+      break;
+      
+    case '?':  // 상태 확인
+      sendStatus();
+      break;
+  }
+}
+
+// 수동 명령 실행
+void executeManualCommand(char cmd) {
+  switch(cmd) {
+    case 'F':
+      moveForward();
+      break;
+    case 'B':
+      moveBackward();
+      break;
+    case 'L':
+      turnLeft();
+      break;
+    case 'R':
+      turnRight();
+      break;
+    case 'S':
+      stopMotors();
+      break;
+  }
+}
+
+// 센서 데이터 전송
+void sendSensorData() {
+  bluetooth.print("FL:");
+  bluetooth.print(frontLeftDistance);
+  bluetooth.print(" FR:");
+  bluetooth.print(frontRightDistance);
+  bluetooth.print(" SL:");
+  bluetooth.print(sideLeftDistance);
+  bluetooth.print(" SR:");
+  bluetooth.println(sideRightDistance);
+}
+
+// 상태 전송
+void sendStatus() {
+  if (autoMode) {
+    bluetooth.println("Status: AUTO Mode");
+  } else {
+    bluetooth.println("Status: MANUAL Mode");
+  }
+  scanAllDirections();
+  sendSensorData();
+}
+
+// 모든 방향 거리 측정
+void scanAllDirections() {
+  frontLeftDistance = measureDistance(TRIG_FRONT_LEFT, ECHO_FRONT_LEFT);
+  frontRightDistance = measureDistance(TRIG_FRONT_RIGHT, ECHO_FRONT_RIGHT);
+  sideLeftDistance = measureDistance(TRIG_SIDE_LEFT, ECHO_SIDE_LEFT);
+  sideRightDistance = measureDistance(TRIG_SIDE_RIGHT, ECHO_SIDE_RIGHT);
+  
+  // 시리얼 모니터 출력
+  Serial.print("앞좌: ");
+  Serial.print(frontLeftDistance);
+  Serial.print("cm, 앞우: ");
+  Serial.print(frontRightDistance);
+  Serial.print("cm, 좌측: ");
+  Serial.print(sideLeftDistance);
+  Serial.print("cm, 우측: ");
+  Serial.print(sideRightDistance);
+  Serial.println("cm");
+}
+
+// 초음파 센서로 거리 측정
+int measureDistance(int trigPin, int echoPin) {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  
+  long duration = pulseIn(echoPin, HIGH, 30000); // 30ms 타임아웃
+  int distance = duration * 0.034 / 2;
+  
+  if (distance <= 0 || distance > 400) {
+    distance = 400;
+  }
+  
+  return distance;
+}
+
+// 장애물 회피 알고리즘 (개선됨)
+void avoidObstacles() {
+  // 앞쪽 최소 거리 계산
+  int frontMinDistance = min(frontLeftDistance, frontRightDistance);
+  
+  // 전방 장애물 감지
+  if (frontMinDistance < SAFE_DISTANCE) {
+    stopMotors();
+    delay(200);
+    bluetooth.println("Obstacle Front!");
+    
+    // 앞쪽 좌우 센서로 어느 쪽이 더 넓은지 판단
+    if (frontLeftDistance > frontRightDistance + 10) {
+      bluetooth.println("Front Left Clear - Turning Left");
+      turnLeft();
+      delay(TURN_DELAY);
+    } 
+    else if (frontRightDistance > frontLeftDistance + 10) {
+      bluetooth.println("Front Right Clear - Turning Right");
+      turnRight();
+      delay(TURN_DELAY);
+    }
+    // 앞쪽 둘 다 막혔으면 측면 확인
+    else if (sideLeftDistance > sideRightDistance && sideLeftDistance > SIDE_DISTANCE) {
+      bluetooth.println("Side Left Clear - Turning Left");
+      turnLeft();
+      delay(TURN_DELAY);
+    }
+    else if (sideRightDistance > sideLeftDistance && sideRightDistance > SIDE_DISTANCE) {
+      bluetooth.println("Side Right Clear - Turning Right");
+      turnRight();
+      delay(TURN_DELAY);
+    }
+    // 모든 방향이 막혔으면 후진 후 180도 회전
+    else {
+      bluetooth.println("All Blocked! Reversing");
+      moveBackward();
+      delay(500);
+      turnAround();
+      delay(1000);
+    }
+  }
+  // 좌측면에 장애물이 너무 가까운 경우
+  else if (sideLeftDistance < SIDE_DISTANCE) {
+    bluetooth.println("Too Close Left - Adjusting Right");
+    // 살짝 우회전으로 거리 확보
+    analogWrite(MOTOR_FL_A, 0);              // 왼쪽 앞 - 반대
+    analogWrite(MOTOR_FL_B, MOTOR_SPEED);    // 왼쪽 앞 - 반대
+    analogWrite(MOTOR_FR_A, MOTOR_SPEED * 0.7);
+    analogWrite(MOTOR_FR_B, 0);
+    analogWrite(A0, MOTOR_SPEED);
+    analogWrite(A1, 0);
+    analogWrite(A2, MOTOR_SPEED * 0.7);
+    analogWrite(A3, 0);
+    delay(300);
+  }
+  // 우측면에 장애물이 너무 가까운 경우
+  else if (sideRightDistance < SIDE_DISTANCE) {
+    bluetooth.println("Too Close Right - Adjusting Left");
+    // 살짝 좌회전으로 거리 확보
+    analogWrite(MOTOR_FL_A, 0);              // 왼쪽 앞 - 반대
+    analogWrite(MOTOR_FL_B, MOTOR_SPEED * 0.7);    // 왼쪽 앞 - 반대
+    analogWrite(MOTOR_FR_A, MOTOR_SPEED);
+    analogWrite(MOTOR_FR_B, 0);
+    analogWrite(A0, MOTOR_SPEED * 0.7);
+    analogWrite(A1, 0);
+    analogWrite(A2, MOTOR_SPEED);
+    analogWrite(A3, 0);
+    delay(300);
+  }
+  // 모든 방향 안전하면 전진
+  else {
+    moveForward();
+  }
+}
+
+// 전진 (왼쪽 앞바퀴만 방향 반대)
+void moveForward() {
+  analogWrite(MOTOR_FL_A, 0);              // 왼쪽 앞 - 반대
+  analogWrite(MOTOR_FL_B, MOTOR_SPEED);    // 왼쪽 앞 - 반대
+  analogWrite(MOTOR_FR_A, MOTOR_SPEED);
+  analogWrite(MOTOR_FR_B, 0);
+  analogWrite(A0, MOTOR_SPEED);
+  analogWrite(A1, 0);
+  analogWrite(A2, MOTOR_SPEED);
+  analogWrite(A3, 0);
+}
+
+// 후진 (왼쪽 앞바퀴만 방향 반대)
+void moveBackward() {
+  analogWrite(MOTOR_FL_A, MOTOR_SPEED);    // 왼쪽 앞 - 반대
+  analogWrite(MOTOR_FL_B, 0);              // 왼쪽 앞 - 반대
+  analogWrite(MOTOR_FR_A, 0);
+  analogWrite(MOTOR_FR_B, MOTOR_SPEED);
+  analogWrite(A0, 0);
+  analogWrite(A1, MOTOR_SPEED);
+  analogWrite(A2, 0);
+  analogWrite(A3, MOTOR_SPEED);
+}
+
+// 좌회전 (왼쪽 앞바퀴만 방향 반대)
+void turnLeft() {
+  analogWrite(MOTOR_FL_A, MOTOR_SPEED);    // 왼쪽 앞 - 반대 (후진)
+  analogWrite(MOTOR_FL_B, 0);              // 왼쪽 앞 - 반대
+  analogWrite(MOTOR_FR_A, MOTOR_SPEED);
+  analogWrite(MOTOR_FR_B, 0);
+  analogWrite(A0, 0);
+  analogWrite(A1, MOTOR_SPEED);
+  analogWrite(A2, MOTOR_SPEED);
+  analogWrite(A3, 0);
+}
+
+// 우회전 (왼쪽 앞바퀴만 방향 반대)
+void turnRight() {
+  analogWrite(MOTOR_FL_A, 0);              // 왼쪽 앞 - 반대 (전진)
+  analogWrite(MOTOR_FL_B, MOTOR_SPEED);    // 왼쪽 앞 - 반대
+  analogWrite(MOTOR_FR_A, 0);
+  analogWrite(MOTOR_FR_B, MOTOR_SPEED);
+  analogWrite(A0, MOTOR_SPEED);
+  analogWrite(A1, 0);
+  analogWrite(A2, 0);
+  analogWrite(A3, MOTOR_SPEED);
+}
+
+// 180도 회전
+void turnAround() {
+  turnRight();
+}
+
+// 모터 정지 (브레이크 모드 사용)
+void stopMotors() {
+  // L9110은 HIGH, HIGH 상태에서 브레이크가 걸립니다
+  digitalWrite(MOTOR_FL_A, HIGH);
+  digitalWrite(MOTOR_FL_B, HIGH);
+  digitalWrite(MOTOR_FR_A, HIGH);
+  digitalWrite(MOTOR_FR_B, HIGH);
+  digitalWrite(A0, HIGH);
+  digitalWrite(A1, HIGH);
+  digitalWrite(A2, HIGH);
+  digitalWrite(A3, HIGH);
+}
