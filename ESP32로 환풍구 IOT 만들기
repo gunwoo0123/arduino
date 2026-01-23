@@ -1,0 +1,304 @@
+import network
+from machine import Pin, ADC
+from time import sleep
+import socket
+from neopixel import NeoPixel
+
+# WiFi 설정
+SSID = 'Multi_2G'
+PASSWORD = '12345678'
+
+# WiFi 연결
+wifi = network.WLAN(network.STA_IF)
+wifi.active(True)
+wifi.connect(SSID, PASSWORD)
+
+while not wifi.isconnected():
+    sleep(1)
+
+print("Connected to", SSID)
+print("IP Address:", wifi.ifconfig()[0])
+
+# MQ-135 센서 설정
+mq135 = ADC(Pin(34))
+mq135.atten(ADC.ATTN_11DB)
+mq135.width(ADC.WIDTH_12BIT)
+
+# 릴레이 설정
+relay = Pin(5, Pin.OUT)
+relay.value(0)
+
+# 네오픽셀 설정 (GPIO14, 12개 LED)
+np = NeoPixel(Pin(14), 12)
+
+# 네오픽셀 색상 설정 함수
+def set_neopixel_color(sensor_value):
+    if sensor_value < 400:
+        color = (0, 255, 0)  # 매우 좋음 - 초록
+    elif sensor_value < 600:
+        color = (100, 255, 0)  # 좋음 - 연두
+    elif sensor_value < 800:
+        color = (255, 200, 0)  # 보통 - 노랑
+    elif sensor_value < 1000:
+        color = (255, 100, 0)  # 나쁨 - 주황
+    else:
+        color = (255, 0, 0)  # 매우 나쁨 - 빨강
+    
+    for i in range(12):
+        np[i] = color
+    np.write()
+
+# 자동/수동 모드
+auto_mode = True
+
+# 센서 읽기
+def read_sensor():
+    sensor_value = mq135.read()
+    
+    if sensor_value < 400:
+        air_quality = "매우 좋음"
+        color = "#28a745"
+    elif sensor_value < 600:
+        air_quality = "좋음"
+        color = "#5cb85c"
+    elif sensor_value < 800:
+        air_quality = "보통"
+        color = "#ffc107"
+    elif sensor_value < 1000:
+        air_quality = "나쁨"
+        color = "#fd7e14"
+    else:
+        air_quality = "매우 나쁨"
+        color = "#dc3545"
+    
+    set_neopixel_color(sensor_value)
+    return sensor_value, air_quality, color
+
+# HTML 템플릿
+HTML_TEMPLATE = """<!DOCTYPE HTML>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>스마트 환기 시스템</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 20px;
+        }}
+        .container {{
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }}
+        h2 {{
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+        }}
+        .status-card {{
+            background: {color};
+            color: white;
+            padding: 25px;
+            border-radius: 15px;
+            margin-bottom: 25px;
+            text-align: center;
+        }}
+        .status-value {{
+            font-size: 48px;
+            font-weight: bold;
+            margin: 10px 0;
+        }}
+        .info-box {{
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 10px 0;
+            text-align: center;
+        }}
+        .info-value {{
+            color: #333;
+            font-size: 24px;
+            font-weight: bold;
+        }}
+        .button {{
+            border: none;
+            color: white;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 10px;
+            width: 45%;
+        }}
+        .button-auto {{ background-color: #667eea; }}
+        .button-manual {{ background-color: #764ba2; }}
+        .button-on {{ background-color: #28a745; }}
+        .button-off {{ background-color: #dc3545; }}
+        .fan-status {{
+            display: inline-block;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-weight: bold;
+            margin: 10px 0;
+            font-size: 18px;
+        }}
+        .fan-on {{ background: #28a745; color: white; }}
+        .fan-off {{ background: #6c757d; color: white; }}
+        .mode-indicator {{
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+            border-left: 4px solid #667eea;
+        }}
+        .fan-icon {{
+            font-size: 70px;
+            margin: 15px 0;
+        }}
+    </style>
+    <script>
+        setTimeout(function(){{ location.reload(); }}, 3000);
+    </script>
+</head>
+<body>
+    <div class="container">
+        <center><h2>🌬️ 스마트 환기 시스템</h2></center>
+        
+        <div class="status-card">
+            <div style="font-size: 18px;">현재 공기질</div>
+            <div class="status-value">{air_quality}</div>
+        </div>
+        
+        <div class="info-box">
+            <div class="info-value">센서 값: {sensor_value}</div>
+        </div>
+        
+        <div class="mode-indicator">
+            <center>
+                <div style="font-size: 14px; color: #666;">현재 모드</div>
+                <div style="font-size: 22px; font-weight: bold; color: #667eea; margin-top: 5px;">{mode_state}</div>
+            </center>
+        </div>
+        
+        <center>
+            <div class="fan-icon">{fan_icon}</div>
+            <p style="font-size: 20px; font-weight: bold; margin: 20px 0;">
+                환풍기: <span class="fan-status {fan_class}">{fan_state}</span>
+            </p>
+        </center>
+        
+        <center>
+            <form>
+                <button type="submit" name="mode" value="auto" class="button button-auto">🤖 자동 모드</button>
+                <button type="submit" name="mode" value="manual" class="button button-manual">✋ 수동 모드</button>
+            </form>
+            <form style="margin-top: 10px;">
+                <button type="submit" name="fan" value="on" class="button button-on">✅ 팬 ON</button>
+                <button type="submit" name="fan" value="off" class="button button-off">❌ 팬 OFF</button>
+            </form>
+        </center>
+        
+        <center>
+            <p style="color: #666; font-size: 12px; margin-top: 20px;">
+                자동 새로고침 (3초)
+            </p>
+        </center>
+    </div>
+</body>
+</html>"""
+
+def web_server():
+    global auto_mode
+    
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(('', 80))
+    s.listen(5)
+    
+    print("웹 서버 시작!")
+    print("접속: http://" + wifi.ifconfig()[0])
+    print("-" * 40)
+    
+    while True:
+        try:
+            conn, addr = s.accept()
+            request = conn.recv(1024).decode()
+            
+            if 'mode=auto' in request:
+                auto_mode = True
+                print('자동 모드')
+            elif 'mode=manual' in request:
+                auto_mode = False
+                print('수동 모드')
+            
+            if not auto_mode:
+                if 'fan=on' in request:
+                    relay.value(1)
+                    print('팬 ON')
+                elif 'fan=off' in request:
+                    relay.value(0)
+                    print('팬 OFF')
+            
+            if auto_mode:
+                sensor_value, _, _ = read_sensor()
+                if sensor_value >= 800:
+                    relay.value(1)
+                else:
+                    relay.value(0)
+            
+            sensor_value, air_quality, color = read_sensor()
+            fan_state = 'ON' if relay.value() else 'OFF'
+            fan_class = 'fan-on' if relay.value() else 'fan-off'
+            fan_icon = '🌀' if relay.value() else '⏹️'
+            mode_state = '자동' if auto_mode else '수동'
+            
+            response = HTML_TEMPLATE.format(
+                color=color,
+                air_quality=air_quality,
+                sensor_value=sensor_value,
+                fan_state=fan_state,
+                fan_class=fan_class,
+                fan_icon=fan_icon,
+                mode_state=mode_state
+            )
+            
+            conn.send('HTTP/1.1 200 OK\r\n')
+            conn.send('Content-Type: text/html; charset=utf-8\r\n')
+            conn.send('Connection: close\r\n\r\n')
+            conn.sendall(response)
+            conn.close()
+            
+        except Exception as e:
+            print('오류:', e)
+
+# 네오픽셀 테스트
+print("네오픽셀 테스트...")
+for i in range(12):
+    np[i] = (255, 0, 0)
+    np.write()
+    sleep(0.1)
+sleep(0.3)
+
+for i in range(12):
+    np[i] = (0, 255, 0)
+    np.write()
+    sleep(0.1)
+sleep(0.3)
+
+for i in range(12):
+    np[i] = (0, 0, 255)
+    np.write()
+    sleep(0.1)
+sleep(0.5)
+
+# 서버 시작
+web_server()
