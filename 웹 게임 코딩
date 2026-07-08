@@ -1,0 +1,535 @@
+import { useEffect, useRef, useState } from "react"
+
+export default function App() {
+  return (
+    <div className="w-full h-screen bg-gradient-to-b from-sky-200 to-sky-400 flex items-center justify-center p-4 overflow-hidden">
+      <Game />
+    </div>
+  )
+}
+
+function Game() {
+  const canvasRef = useRef(null)
+  const animationRef = useRef(null)
+
+  const [score, setScore] = useState(0)
+  const [level, setLevel] = useState(1)
+  const [started, setStarted] = useState(false)
+  const [gameOver, setGameOver] = useState(false)
+  const [levelClear, setLevelClear] = useState(false)
+
+  const [theme, setTheme] = useState("day")
+  const [playerColor, setPlayerColor] = useState("#FF6347")
+  const [points, setPoints] = useState(0)
+  const [shopOpen, setShopOpen] = useState(false)
+
+  const shopSkins = [
+    {
+      id: "rainbow",
+      name: "Rainbow Skin",
+      price: 50,
+      preview:
+        "linear-gradient(90deg, red, orange, yellow, green, blue, purple)",
+      shape: "cube",
+    },
+    {
+      id: "gold",
+      name: "Gold Neon Skin",
+      price: 100,
+      preview: "#FFD700",
+      shape: "cube",
+    },
+    {
+      id: "galaxy",
+      name: "Galaxy Skin",
+      price: 120,
+      preview: "linear-gradient(135deg, #4338CA, #7C3AED, #EC4899)",
+      shape: "cube",
+    },
+    {
+      id: "ice",
+      name: "Ice Skin",
+      price: 80,
+      preview: "linear-gradient(135deg, #7DD3FC, #E0F2FE)",
+      shape: "cube",
+    },
+    {
+      id: "lava",
+      name: "Lava Skin",
+      price: 140,
+      preview: "linear-gradient(135deg, #FF3B30, #FF9500, #FFD60A)",
+      shape: "cube",
+    },
+    {
+      id: "matrix",
+      name: "Matrix Skin",
+      price: 160,
+      preview: "linear-gradient(135deg, #00FF66, #003B00)",
+      shape: "cube",
+    },
+    {
+      id: "cottonCandy",
+      name: "Cotton Candy",
+      price: 90,
+      preview: "linear-gradient(135deg, #FF9ECF, #A5B4FC)",
+      shape: "cube",
+    },
+    {
+      id: "shadow",
+      name: "Shadow Skin",
+      price: 200,
+      preview: "linear-gradient(135deg, #111827, #6B7280)",
+      shape: "cube",
+    },
+    {
+      id: "carRed",
+      name: "Turbo Car",
+      price: 180,
+      preview: "linear-gradient(135deg, #ef4444, #991b1b)",
+      shape: "car",
+    },
+    {
+      id: "shipBlue",
+      name: "Speed Boat",
+      price: 220,
+      preview: "linear-gradient(135deg, #0ea5e9, #1e3a8a)",
+      shape: "ship",
+    },
+  ]
+
+  const [unlockedSkins, setUnlockedSkins] = useState([
+    "#FF6347",
+    "#3B82F6",
+    "#22C55E",
+    "#EAB308",
+    "#A855F7",
+    "ice",
+    "cottonCandy",
+    "carRed",
+    "shipBlue",
+  ])
+
+  const gameRef = useRef({
+    playerY: 0,
+    velocity: 0,
+    gravity: 0.65,
+    jumping: false,
+    jumpCount: 0,
+    obstacles: [],
+    speed: 6,
+    score: 0,
+    obstacleTimer: 0,
+  })
+
+  const resetGameData = () => ({
+    playerY: 0,
+    velocity: 0,
+    gravity: 0.65,
+    jumping: false,
+    jumpCount: 0,
+    obstacles: [],
+    speed: 6,
+    score: 0,
+    obstacleTimer: 0,
+  })
+
+  const goToMenu = () => {
+    gameRef.current = resetGameData()
+    setScore(0)
+    setLevel(1)
+    setStarted(false)
+    setGameOver(false)
+    setLevelClear(false)
+  }
+
+  const restart = () => {
+    gameRef.current = resetGameData()
+    setScore(0)
+    setLevel(1)
+    setStarted(true)
+    setGameOver(false)
+    setLevelClear(false)
+  }
+
+  const startLevel = (nextLevel) => {
+    const game = gameRef.current
+
+    game.obstacles = []
+    game.speed = 6 + (nextLevel - 1) * 1.2
+    game.obstacleTimer = 0
+
+    setLevel(nextLevel)
+    setLevelClear(false)
+    setStarted(true)
+  }
+
+  const jump = () => {
+    const game = gameRef.current
+
+    if (!started) {
+      setStarted(true)
+    }
+
+    if (gameOver) {
+      restart()
+      return
+    }
+
+    if (levelClear) {
+      startLevel(level + 1)
+      return
+    }
+
+    if (game.jumpCount < 2) {
+      game.velocity = -13
+      game.jumping = true
+      game.jumpCount += 1
+    }
+  }
+
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.code === "Space") {
+        e.preventDefault()
+        jump()
+      }
+    }
+
+    window.addEventListener("keydown", handleKey)
+
+    return () => {
+      window.removeEventListener("keydown", handleKey)
+    }
+  }, [started, gameOver, levelClear, level])
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+
+    if (!canvas) return
+
+    const ctx = canvas.getContext("2d")
+
+    canvas.width = 800
+    canvas.height = 400
+
+    const groundY = 320
+    const playerX = 100
+    const playerSize = 56
+
+    const drawPlayer = (x, y, skin) => {
+      const skinData = shopSkins.find((s) => s.id === skin)
+      const shape = skinData?.shape || "cube"
+
+      ctx.fillStyle = playerColor
+
+      if (shape === "car") {
+        ctx.fillRect(x - 8, y + 18, 64, 18)
+        ctx.fillRect(x + 6, y + 2, 42, 18)
+
+        ctx.fillStyle = "black"
+
+        ctx.beginPath()
+        ctx.arc(x + 8, y + 40, 7, 0, Math.PI * 2)
+        ctx.arc(x + 40, y + 40, 7, 0, Math.PI * 2)
+        ctx.fill()
+      } else if (shape === "ship") {
+        ctx.beginPath()
+        ctx.moveTo(x - 6, y + 32)
+        ctx.lineTo(x + 50, y + 32)
+        ctx.lineTo(x + 40, y + 46)
+        ctx.lineTo(x + 8, y + 46)
+        ctx.closePath()
+        ctx.fill()
+      } else {
+        ctx.fillRect(x + 6, y, 40, 40)
+
+        ctx.fillStyle = "white"
+        ctx.fillRect(x + 14, y + 12, 6, 6)
+        ctx.fillRect(x + 30, y + 12, 6, 6)
+
+        ctx.fillStyle = "black"
+        ctx.fillRect(x + 16, y + 14, 2, 2)
+        ctx.fillRect(x + 32, y + 14, 2, 2)
+      }
+    }
+
+    const render = () => {
+      const game = gameRef.current
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+      if (theme === "day") {
+        ctx.fillStyle = "#87CEEB"
+      } else if (theme === "sunset") {
+        ctx.fillStyle = "#FF9966"
+      } else {
+        ctx.fillStyle = "#111827"
+      }
+
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+      ctx.fillStyle = "#2E8B57"
+      ctx.fillRect(0, groundY + playerSize, canvas.width, 80)
+
+      if (started && !gameOver && !levelClear) {
+        game.velocity += game.gravity
+        game.playerY += game.velocity
+
+        if (game.playerY > 0) {
+          game.playerY = 0
+          game.velocity = 0
+          game.jumpCount = 0
+        }
+
+        game.obstacleTimer += 1
+
+        if (game.obstacleTimer > Math.max(45, 90 - level * 5)) {
+          game.obstacleTimer = 0
+
+          game.obstacles.push({
+            x: canvas.width,
+            width: 30 + Math.random() * 20,
+            height: 50 + Math.random() * 120,
+            passed: false,
+          })
+        }
+
+        game.obstacles.forEach((obs) => {
+          obs.x -= game.speed
+
+          if (!obs.passed && obs.x + obs.width < playerX) {
+            obs.passed = true
+            game.score += 1
+            setScore(game.score)
+
+            if (game.score % 3 === 0) {
+              game.speed += 0.8
+            }
+
+            if (game.score % 2 === 0) {
+              setPoints((prev) => prev + 5)
+            }
+
+            if (game.score >= level * 10) {
+              setLevelClear(true)
+            }
+          }
+
+          const playerTop = groundY + game.playerY
+          const playerBottom = playerTop + 40
+          const playerRight = playerX + 40
+
+          const obstacleTop = groundY + playerSize - obs.height
+          const obstacleRight = obs.x + obs.width
+
+          const hit =
+            playerRight > obs.x &&
+            playerX < obstacleRight &&
+            playerBottom > obstacleTop
+
+          if (hit) {
+            setGameOver(true)
+          }
+        })
+
+        game.obstacles = game.obstacles.filter((obs) => obs.x > -100)
+      }
+
+      drawPlayer(playerX, groundY + game.playerY + 12, playerColor)
+
+      game.obstacles.forEach((obs) => {
+        ctx.fillStyle = "#1F2937"
+
+        ctx.fillRect(
+          obs.x,
+          groundY + playerSize - obs.height,
+          obs.width,
+          obs.height
+        )
+      })
+
+      ctx.fillStyle = "#111"
+      ctx.font = "bold 28px Arial"
+
+      ctx.fillText(`Score: ${score}`, 20, 40)
+      ctx.fillText(`Level: ${level}`, 20, 75)
+      ctx.fillText(`Points: ${points}`, 20, 110)
+
+      animationRef.current = requestAnimationFrame(render)
+    }
+
+    render()
+
+    return () => {
+      cancelAnimationFrame(animationRef.current)
+    }
+  }, [started, gameOver, levelClear, theme, playerColor, score, level, points])
+
+  return (
+    <div className="flex flex-col items-center gap-4 w-full">
+      {!started && (
+        <>
+          <div className="flex gap-3 mb-2 flex-wrap justify-center">
+            <button
+              onClick={() => setTheme("day")}
+              className="px-4 py-2 rounded-xl font-bold bg-yellow-300"
+            >
+              Day
+            </button>
+
+            <button
+              onClick={() => setTheme("sunset")}
+              className="px-4 py-2 rounded-xl font-bold bg-orange-400 text-white"
+            >
+              Sunset
+            </button>
+
+            <button
+              onClick={() => setTheme("night")}
+              className="px-4 py-2 rounded-xl font-bold bg-slate-900 text-white"
+            >
+              Night
+            </button>
+          </div>
+
+          <div className="flex gap-3 mb-2 flex-wrap justify-center border-t pt-3">
+            {unlockedSkins.map((color) => {
+              const skinData = shopSkins.find((s) => s.id === color)
+
+              return (
+                <button
+                  key={color}
+                  onClick={() => setPlayerColor(color)}
+                  className={`w-10 h-10 rounded-full border-4 shadow transition hover:scale-110 ${
+                    playerColor === color
+                      ? "border-black"
+                      : "border-white"
+                  }`}
+                  style={{
+                    background: skinData
+                      ? skinData.preview
+                      : color,
+                  }}
+                />
+              )
+            })}
+          </div>
+
+          <div className="flex gap-3 items-center">
+            <button
+              onClick={() => setShopOpen(!shopOpen)}
+              className="px-5 py-2 rounded-2xl bg-purple-600 text-white font-bold shadow-lg"
+            >
+              {shopOpen ? "상점 열림" : "Skin Shop"} ({points}P)
+            </button>
+
+            {shopOpen && (
+              <button
+                onClick={() => setShopOpen(false)}
+                className="px-5 py-2 rounded-2xl bg-red-500 text-white font-bold shadow-lg"
+              >
+                상점 닫기
+              </button>
+            )}
+          </div>
+
+          {shopOpen && (
+            <div className="bg-white/90 rounded-2xl p-4 flex flex-col gap-4 items-center shadow-2xl max-h-[400px] overflow-y-auto w-[320px]">
+              {shopSkins.map((skin) => {
+                const owned = unlockedSkins.includes(skin.id)
+
+                return (
+                  <div
+                    key={skin.id}
+                    className="flex gap-3 items-center w-full justify-between"
+                  >
+                    <div
+                      className="w-10 h-10 rounded-full shadow-lg"
+                      style={{
+                        background: skin.preview,
+                      }}
+                    />
+
+                    <div className="flex flex-col flex-1">
+                      <span className="font-bold text-black">
+                        {skin.name}
+                      </span>
+
+                      <span className="text-sm text-slate-600">
+                        {skin.price} Points
+                      </span>
+                    </div>
+
+                    <button
+                      disabled={owned || points < skin.price}
+                      onClick={() => {
+                        if (!owned && points >= skin.price) {
+                          setPoints((prev) => prev - skin.price)
+
+                          setUnlockedSkins((prev) => [
+                            ...prev,
+                            skin.id,
+                          ])
+                        }
+                      }}
+                      className="px-4 py-2 rounded-xl bg-purple-600 text-white font-bold disabled:opacity-40"
+                    >
+                      {owned ? "Owned" : "Buy"}
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      <div className="bg-white rounded-3xl shadow-2xl p-4 border-4 border-white">
+        <canvas
+          ref={canvasRef}
+          className="rounded-2xl max-w-full cursor-pointer"
+          onClick={jump}
+        />
+      </div>
+
+      {(gameOver || levelClear) && (
+        <div className="flex gap-3">
+          {gameOver && (
+            <button
+              onClick={restart}
+              className="px-5 py-3 rounded-2xl bg-red-500 text-white font-bold shadow-lg"
+            >
+              Restart
+            </button>
+          )}
+
+          {levelClear && (
+            <button
+              onClick={() => startLevel(level + 1)}
+              className="px-5 py-3 rounded-2xl bg-green-500 text-white font-bold shadow-lg"
+            >
+              Next Level
+            </button>
+          )}
+
+          <button
+            onClick={goToMenu}
+            className="px-5 py-3 rounded-2xl bg-slate-800 text-white font-bold shadow-lg"
+          >
+            Main Menu
+          </button>
+        </div>
+      )}
+
+      <div className="text-white text-center font-bold">
+        <p className="text-xl text-slate-900">
+          SPACE 또는 터치로 점프
+        </p>
+
+        <p className="text-slate-800">
+          장애물을 피해서 최고 점수를 기록하세요!
+        </p>
+      </div>
+    </div>
+  )
+}
