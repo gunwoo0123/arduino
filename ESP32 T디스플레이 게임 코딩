@@ -1,0 +1,156 @@
+#include <TFT_eSPI.h>
+#include <SPI.h>
+
+TFT_eSPI tft = TFT_eSPI();
+
+#define BTN_LEFT  0
+#define BTN_RIGHT 35
+
+unsigned long lastActionTime = 0;      
+const unsigned long SLEEP_TIMEOUT = 30000; 
+
+enum GameState { START, PLAY, GAMEOVER, SHOP };
+GameState currentState = START;
+
+// 게임 물리 변수
+int playerY = 100;
+float velocity = 0, gravity = 0.7;
+int jumpCount = 0, gold = 0, score = 0, obstacleCounter = 0;
+int obsX = 240, obsH = 15;
+float obsSpeed = 5;
+int starX[15], starY[15];
+
+struct Skin {
+  char name[16];
+  void (*drawFunc)(int x, int y, uint32_t t);
+  int price;
+  bool unlocked;
+};
+
+// --- 스킨 함수들 (축약형) ---
+void drawGreen(int x, int y, uint32_t t)   { tft.fillRect(x, y, 15, 15, TFT_GREEN); }
+void drawBlue(int x, int y, uint32_t t)    { tft.fillRect(x, y, 15, 15, TFT_BLUE); }
+void drawYellow(int x, int y, uint32_t t)  { tft.fillRect(x, y, 15, 15, TFT_YELLOW); }
+void drawPink(int x, int y, uint32_t t)    { tft.fillRect(x, y, 15, 15, TFT_MAGENTA); }
+void drawCheck(int x, int y, uint32_t t)   { tft.fillRect(x, y, 15, 15, TFT_BLACK); tft.fillRect(x, y, 7, 7, TFT_WHITE); tft.fillRect(x+8, y+8, 7, 7, TFT_WHITE); }
+void drawStripe(int x, int y, uint32_t t)  { tft.fillRect(x, y, 15, 15, TFT_BLACK); for(int i=0; i<15; i+=4) tft.drawFastVLine(x+i, y, 15, TFT_CYAN); }
+void drawNoise(int x, int y, uint32_t t)   { tft.fillRect(x, y, 15, 15, TFT_BLACK); for(int i=0; i<30; i++) tft.drawPixel(x+random(15), y+random(15), tft.color565(random(255),random(255),random(255))); }
+void drawNeon(int x, int y, uint32_t t)    { tft.fillRect(x, y, 15, 15, TFT_BLACK); uint16_t c = (t/150%2==0)?TFT_GREEN:tft.color565(0,50,0); tft.drawRect(x,y,15,15,c); tft.drawRect(x+2,y+2,11,11,c); }
+void drawBomb(int x, int y, uint32_t t)    { tft.fillRect(x, y, 15, 15, TFT_BLACK); tft.fillCircle(x+7,y+8,6,TFT_DARKGREY); tft.fillRect(x+6,y+1,3,2,TFT_RED); uint16_t fc=(t/100%2==0)?TFT_YELLOW:TFT_ORANGE; tft.drawPixel(x+7,y,fc); }
+void drawDiamond(int x, int y, uint32_t t) { tft.fillRect(x, y, 15, 15, TFT_BLACK); uint16_t c=tft.color565(random(150,255),random(200,255),255); tft.drawLine(x+7,y,x,y+7,c); tft.drawLine(x,y+7,x+7,y+14,c); tft.drawLine(x+7,y+14,x+14,y+7,c); tft.drawLine(x+14,y+7,x+7,y,c); }
+void drawRainbowGrad(int x, int y, uint32_t t) { for(int i=0; i<15; i++) { uint8_t r=127+127*sin(t*0.005+i*0.5); uint8_t g=127+127*sin(t*0.005+i*0.5+2.0); uint8_t b=127+127*sin(t*0.005+i*0.5+4.0); tft.drawFastVLine(x+i,y,15,tft.color565(r,g,b)); } }
+
+#define MAX_SKINS 11
+Skin skins[MAX_SKINS] = {
+  {"Green Cube", drawGreen, 0, true}, {"Blue Cube", drawBlue, 0, true}, {"Yellow Cube", drawYellow, 0, true}, {"Pink Cube", drawPink, 0, true},
+  {"Checkerboard", drawCheck, 15, false}, {"Cyan Stripes", drawStripe, 15, false}, {"Cosmic Noise", drawNoise, 15, false},
+  {"Neon Matrix", drawNeon, 30, false}, {"Mini Bomb", drawBomb, 30, false}, {"Diamond", drawDiamond, 30, false}, {"Rainbow Grad", drawRainbowGrad, 50, false}
+};
+
+int currentSkinIdx = 0, tempSkinIdx = 0;
+
+void enterSleep() {
+  tft.fillScreen(TFT_BLACK);
+  tft.writecommand(0x10); 
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0); 
+  esp_deep_sleep_start();
+}
+
+void updateActivity() { lastActionTime = millis(); }
+
+void setup() {
+  pinMode(BTN_LEFT, INPUT_PULLUP);
+  pinMode(BTN_RIGHT, INPUT_PULLUP);
+  tft.init();
+  tft.setRotation(1);
+  tft.fillScreen(TFT_BLACK);
+  for(int i=0; i<15; i++) { starX[i] = random(0, 240); starY[i] = random(0, 80); }
+  updateActivity();
+}
+
+void drawBackground() {
+  tft.fillCircle(200, 30, 15, TFT_YELLOW); tft.fillCircle(210, 30, 15, TFT_BLACK);
+  for(int i=0; i<15; i++) tft.drawPixel(starX[i], starY[i], TFT_WHITE);
+  tft.drawLine(0, 116, 240, 116, TFT_DARKGREY);
+}
+
+void resetGame() {
+  score = 0; obstacleCounter = 0; obsX = 240; obsSpeed = 5;
+  playerY = 100; velocity = 0; jumpCount = 0;
+  tft.fillScreen(TFT_BLACK);
+}
+
+void loop() {
+  uint32_t t = millis();
+  if (millis() - lastActionTime > SLEEP_TIMEOUT) enterSleep();
+  bool leftPressed = (digitalRead(BTN_LEFT) == LOW);
+  bool rightPressed = (digitalRead(BTN_RIGHT) == LOW);
+  if (leftPressed || rightPressed) updateActivity();
+
+  switch (currentState) {
+    case START:
+      tft.setCursor(55, 45); tft.setTextColor(TFT_NAVY, TFT_BLACK); tft.setTextSize(2); tft.print("NIGHT JUMP");
+      tft.setCursor(55, 100); tft.setTextColor(TFT_WHITE, TFT_BLACK); tft.setTextSize(1); tft.print("Press Right to Start");
+      if (rightPressed) { resetGame(); currentState = PLAY; while(digitalRead(BTN_RIGHT) == LOW); }
+      break;
+
+    case PLAY:
+      if (rightPressed && jumpCount < 2) { velocity = -8.5; jumpCount++; while(digitalRead(BTN_RIGHT) == LOW); }
+      velocity += gravity; playerY += velocity;
+      if (playerY >= 100) { playerY = 100; jumpCount = 0; }
+      obsX -= obsSpeed;
+      if (obsX < -20) { obsX = 240; obsH = random(15, 35); score++; obstacleCounter++; if (obstacleCounter >= 5) { gold++; obstacleCounter = 0; } obsSpeed += 0.15; }
+      if (obsX < 35 && obsX > 5 && playerY + 15 > (115 - obsH)) { currentState = GAMEOVER; tft.fillScreen(TFT_BLACK); }
+      tft.fillScreen(TFT_BLACK); drawBackground();
+      skins[currentSkinIdx].drawFunc(20, playerY, t);
+      tft.fillRect(obsX, 115 - obsH, 15, obsH, 0xA000); 
+      tft.setTextColor(TFT_SILVER, TFT_BLACK); tft.setTextSize(1); tft.setCursor(5, 5); tft.printf("SCORE:%d  GOLD:%d", score, gold);
+      delay(10); break;
+
+    case GAMEOVER:
+      tft.setCursor(65, 40); tft.setTextColor(TFT_RED, TFT_BLACK); tft.setTextSize(2); tft.print("GAME OVER");
+      tft.setCursor(45, 120); tft.setTextColor(TFT_WHITE, TFT_BLACK); tft.setTextSize(1); tft.print("L: SHOP  R: RESTART");
+      if (leftPressed) { tempSkinIdx = currentSkinIdx; currentState = SHOP; tft.fillScreen(TFT_BLACK); while(digitalRead(BTN_LEFT) == LOW); }
+      if (rightPressed) { resetGame(); currentState = PLAY; while(digitalRead(BTN_RIGHT) == LOW); }
+      break;
+
+    case SHOP:
+      // 상점 제목 및 골드 상시 표시
+      tft.setTextSize(2); tft.setCursor(65, 15); tft.setTextColor(TFT_GOLD, TFT_BLACK); tft.print("- SHOP -");
+      tft.setTextSize(1); tft.setCursor(50, 50); tft.setTextColor(TFT_WHITE, TFT_BLACK); tft.printf("Current Gold: %d  ", gold);
+
+      // --- 스킨 프리뷰 ---
+      tft.drawRect(108, 73, 19, 19, TFT_WHITE);
+      skins[tempSkinIdx].drawFunc(110, 75, t);
+      
+      // --- 스킨 이름 및 가격 (이 부분이 안 보여서 수정함) ---
+      tft.setTextSize(1);
+      tft.setCursor(30, 105);
+      tft.setTextColor(TFT_YELLOW, TFT_BLACK); // 배경색 지정 필수
+      tft.printf("Skin: %-15s", skins[tempSkinIdx].name); // %-15s로 남은 공간 공백 채움
+      
+      tft.setCursor(30, 120);
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      if (skins[tempSkinIdx].unlocked) {
+        tft.print("[Owned] R:Select & Exit    ");
+      } else {
+        tft.printf("Price: %-2d Gold (R:Buy)    ", skins[tempSkinIdx].price);
+      }
+
+      tft.setCursor(30, 140);
+      tft.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+      tft.print("L: Next Skin / R: Action");
+
+      if (leftPressed) { 
+        tempSkinIdx = (tempSkinIdx + 1) % MAX_SKINS; 
+        tft.fillRect(0, 70, 240, 80, TFT_BLACK); // 정보를 지우고 다시 그리도록 유도
+        while(digitalRead(BTN_LEFT) == LOW); 
+      }
+      if (rightPressed) {
+        if (!skins[tempSkinIdx].unlocked && gold >= skins[tempSkinIdx].price) { gold -= skins[tempSkinIdx].price; skins[tempSkinIdx].unlocked = true; }
+        else if (skins[tempSkinIdx].unlocked) { currentSkinIdx = tempSkinIdx; currentState = GAMEOVER; tft.fillScreen(TFT_BLACK); }
+        while(digitalRead(BTN_RIGHT) == LOW);
+      }
+      break;
+  }
+}
